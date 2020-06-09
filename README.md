@@ -15,5 +15,5 @@ pip install torch torchvision
 Train a ResNet152 model with self-distillation on CIFAR100 dataset.
 
 ```python
-python train_teacher.py --model=resnet152
+python train.py --model=resnet152
 ```
