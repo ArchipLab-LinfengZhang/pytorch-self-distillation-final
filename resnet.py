@@ -129,7 +129,18 @@ class SepConv(nn.Module):
     def forward(self, x):
         return self.op(x)
 
-
+def dowmsampleBottleneck(channel_in, channel_out, stride=2):
+    return nn.Sequential(
+        nn.Conv2d(channel_in, 128, kernel_size=1, stride=1),
+        nn.BatchNorm2d(128),
+        nn.ReLU(),
+        nn.Conv2d(128, 128, kernel_size=3, stride=stride, padding=1),
+        nn.BatchNorm2d(128),
+        nn.ReLU(),
+        nn.Conv2d(128, channel_out, kernel_size=1, stride=1),
+        nn.BatchNorm2d(channel_out),
+        nn.ReLU(),
+        )
 
 class ResNet(nn.Module):
 
@@ -205,6 +216,8 @@ class ResNet(nn.Module):
                 channel_in=64 * block.expansion,
                 channel_out=64 * block.expansion
             ),
+            nn.BatchNorm2d(64 * block.expansion),
+            nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='bilinear'),
             nn.Sigmoid()
         )
@@ -214,6 +227,8 @@ class ResNet(nn.Module):
                 channel_in=128 * block.expansion,
                 channel_out=128 * block.expansion
             ),
+            nn.BatchNorm2d(128 * block.expansion),
+            nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='bilinear'),
             nn.Sigmoid()
         )
@@ -223,6 +238,8 @@ class ResNet(nn.Module):
                 channel_in=256 * block.expansion,
                 channel_out=256 * block.expansion
             ),
+            nn.BatchNorm2d(256 * block.expansion),
+            nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='bilinear'),
             nn.Sigmoid()
         )
@@ -309,7 +326,7 @@ class ResNet(nn.Module):
         out3 = self.fc3(out3_feature)
         out4 = self.fc4(out4_feature)
 
-        return [out4, out3, out2, out1]
+        return [out4, out3, out2, out1], [out4_feature, out3_feature, out2_feature, out1_feature]
 
 
 def _resnet(arch, block, layers, pretrained, progress, **kwargs):
