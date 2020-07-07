@@ -10,12 +10,13 @@ from autoaugment import CIFAR10Policy
 from cutout import Cutout
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
-parser.add_argument('--model', default="resnet152", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
+parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
+parser.add_argument('--model', default="resnet18", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
                                                                    "wideresnet50|wideresnet101|resnext50|resnext101")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
 parser.add_argument('--epoch', default=250, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
+parser.add_argument('--feature_loss_coefficient', default=0.03, type=float)
 parser.add_argument('--dataset_path', default="data", type=str)
 parser.add_argument('--autoaugment', default=True, type=bool)
 parser.add_argument('--temperature', default=3.0, type=float)
@@ -23,7 +24,6 @@ parser.add_argument('--batchsize', default=128, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 print(args)
-
 
 def CrossEntropy(outputs, targets):
     log_softmax_outputs = F.log_softmax(outputs/args.temperature, dim=1)
@@ -107,6 +107,7 @@ if args.model == "resnext101_32x8d":
 net.to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
+init = False
 
 if __name__ == "__main__":
     best_acc = 0
@@ -122,9 +123,25 @@ if __name__ == "__main__":
             length = len(trainloader)
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
-            outputs = net(inputs)
+            outputs, outputs_feature = net(inputs)
             ensemble = sum(outputs[:-1])/len(outputs)
             ensemble.detach_()
+
+            if init is False:
+                #   init the adaptation layers.
+                #   we add feature adaptation layers here to soften the influence from feature distillation loss
+                #   the feature distillation in our conference version :  | f1-f2 | ^ 2
+                #   the feature distillation in the final version : |Fully Connected Layer(f1) - f2 | ^ 2
+                layer_list = []
+                teacher_feature_size = outputs_feature[0].size(1)
+                for index in range(1, len(outputs_feature)):
+                    student_feature_size = outputs_feature[index].size(1)
+                    layer_list.append(nn.Linear(student_feature_size, teacher_feature_size))
+                net.adaptation_layers = nn.ModuleList(layer_list)
+                net.adaptation_layers.cuda()
+                optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
+                #   define the optimizer here again so it will optimize the net.adaptation_layers
+                init = True
 
             #   compute loss
             loss = torch.FloatTensor([0.]).to(device)
@@ -133,10 +150,19 @@ if __name__ == "__main__":
             loss += criterion(outputs[0], labels)
 
             teacher_output = outputs[0].detach()
+            teacher_feature = outputs_feature[0].detach()
+
             #   for shallow classifiers
             for index in range(1, len(outputs)):
+                #   logits distillation
                 loss += CrossEntropy(outputs[index], teacher_output) * args.loss_coefficient
                 loss += criterion(outputs[index], labels) * (1 - args.loss_coefficient)
+                #   feature distillation
+                if index != 1:
+                    loss += torch.dist(net.adaptation_layers[index-1](outputs_feature[index]), teacher_feature) * \
+                            args.feature_loss_coefficient
+                    #   the feature distillation loss will not be applied to the shallowest classifier
+
             sum_loss += loss.item()
             optimizer.zero_grad()
             loss.backward()
@@ -162,7 +188,7 @@ if __name__ == "__main__":
                 net.eval()
                 images, labels = data
                 images, labels = images.to(device), labels.to(device)
-                outputs = net(images)
+                outputs, outputs_feature = net(images)
                 ensemble = sum(outputs) / len(outputs)
                 outputs.append(ensemble)
                 for classifier_index in range(len(outputs)):
